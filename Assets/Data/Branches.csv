@@ -1,0 +1,15 @@
+choiceId,eventId,label,check,successText,failText,successEffects,failEffects
+bully_help,bully_fight,挺身而出,str>=5,你挡住了对方，同学感激地看着你。,你冲上去却被推倒，鼻子青了一块。,str+1;luck+1,str-1
+bully_ignore,bully_fight,装作没看见,,校园继续吵闹，你低头走开了。,,int+0,
+sports_run,sports_day,全力冲刺,str>=6,你在最后一棒反超，观众席爆发出欢呼。,你拼尽全力仍慢半步，但没有遗憾。,str+1;luck+1,str+1
+sports_watch,sports_day,当拉拉队,,你在场边喊到嗓子哑，也算参与其中。,,luck+1,
+gaokao_fight,gaokao,拼尽全力,int>=7,分数超常发挥，你看见了更宽的路。,发挥一般，结果差强人意。,int+1;tag:gaokao_good;tag:gaokao_done,tag:gaokao_done
+gaokao_relax,gaokao,随缘应考,luck>=6,你意外考得不错，运气站在你这边。,成绩平平，人生换一条轨道继续。,luck+1;tag:gaokao_good;tag:gaokao_done,tag:gaokao_done
+startup_join,startup_idea,一起干,luck>=7,项目居然做起来了，你迎来高光时刻。,项目失败，你赔进时间与积蓄。,family+2;luck+1;tag:startup_ok,family-2;tag:startup_fail
+startup_refuse,startup_idea,稳妥拒绝,,朋友后来联系渐少，你守住了安稳。,,family+0,
+gamble_play,gamble_night,坐下试试,luck>=7,今晚你赢了不少，心里却有点发虚。,牌运很差，钱像水一样流走。,family+1;luck+1,family-2;luck-1
+gamble_leave,gamble_night,婉拒离开,,你提早回家，夜风很干净。,,luck+1,
+midlife_change,midlife_crisis,换一条路试试,int>=6,你开始副业与学习，生活重新有了锋芒。,尝试并不顺利，但你至少动起来了。,int+1;luck+1,str+1
+midlife_accept,midlife_crisis,接纳当下,,你泡了杯茶，决定把眼前的日子过好。,,luck+1;family+1,
+invest_yes,invest_chance,投入一笔,luck>=6;family>=6,投资回报不错，家里宽裕了些。,项目踩雷，你损失了一笔钱。,family+2,family-2
+invest_no,invest_chance,按兵不动,,你把钱放在更稳妥的地方。,,family+0,
