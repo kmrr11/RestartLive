@@ -15,7 +15,7 @@ namespace LifeSim.Event
             _rng = rng ?? new System.Random();
         }
 
-        public List<EventDefinition> PickForAge(PlayerState state, int count = 1)
+        public List<EventDefinition> PickForSeason(PlayerState state, int count = 1)
         {
             var result = new List<EventDefinition>();
             if (state == null || count <= 0)
@@ -35,15 +35,27 @@ namespace LifeSim.Event
             return result;
         }
 
+        // Backward-compatible alias.
+        public List<EventDefinition> PickForAge(PlayerState state, int count = 1)
+        {
+            return PickForSeason(state, count);
+        }
+
         List<EventDefinition> BuildPool(PlayerState state)
         {
             var pool = new List<EventDefinition>();
             foreach (var evt in _db.Events)
             {
+                if (evt.IsForced)
+                    continue;
+
                 if (state.Age < evt.AgeMin || state.Age > evt.AgeMax)
                     continue;
 
-                if (evt.Once && state.TriggeredOnceEvents.Contains(evt.Id))
+                if (!SeasonUtil.Allows(evt.SeasonMask, state.Season))
+                    continue;
+
+                if (evt.TriggersOnce && state.TriggeredOnceEvents.Contains(evt.Id))
                     continue;
 
                 if (!ConditionParser.Evaluate(evt.Require, state))

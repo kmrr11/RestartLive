@@ -6,11 +6,12 @@ using UnityEngine;
 namespace LifeSim.Data
 {
     /// <summary>
-    /// Supports effects like: int+1;str-1;tag:graduate;kill;killChance:0.2
+    /// Supports effects like: int+1;str-1;tag:graduate;buff:grief;kill;killChance:0.2
     /// </summary>
     public static class EffectExecutor
     {
-        public static void Apply(string effects, PlayerState state, System.Random rng = null)
+        public static void Apply(string effects, PlayerState state, System.Random rng = null,
+            EventDatabase db = null)
         {
             if (string.IsNullOrWhiteSpace(effects) || state == null || !state.Alive)
                 return;
@@ -34,7 +35,7 @@ namespace LifeSim.Data
                     if (float.TryParse(part.Substring("killChance:".Length), NumberStyles.Float,
                             CultureInfo.InvariantCulture, out float chance))
                     {
-                        chance = Mathf.Clamp01(chance - state.Luck * 0.01f);
+                        chance = Mathf.Clamp01(chance - state.GetAttr("luck") * 0.01f + state.GetKillChanceMod());
                         if (rng.NextDouble() < chance)
                             state.Alive = false;
                     }
@@ -42,9 +43,31 @@ namespace LifeSim.Data
                     continue;
                 }
 
+                if (part.StartsWith("buff:", StringComparison.OrdinalIgnoreCase))
+                {
+                    ApplyBuff(part.Substring(5), state, db);
+                    continue;
+                }
+
+                if (part.StartsWith("!buff:", StringComparison.OrdinalIgnoreCase) ||
+                    part.StartsWith("-buff:", StringComparison.OrdinalIgnoreCase))
+                {
+                    var buffId = part.Substring(part.IndexOf(':') + 1).Trim();
+                    state.RemoveBuff(buffId);
+                    continue;
+                }
+
+                if (part.StartsWith("favor:", StringComparison.OrdinalIgnoreCase))
+                {
+                    ApplyFavor(part.Substring(6), state, db);
+                    continue;
+                }
+
                 if (part.StartsWith("tag:", StringComparison.OrdinalIgnoreCase))
                 {
-                    state.AddTag(part.Substring(4));
+                    var tag = part.Substring(4);
+                    state.AddTag(tag);
+                    NoteCharacterMeet(tag, state, db);
                     continue;
                 }
 
@@ -58,6 +81,64 @@ namespace LifeSim.Data
 
                 ApplyAttrDelta(part, state);
             }
+        }
+
+        static void ApplyFavor(string spec, PlayerState state, EventDatabase db)
+        {
+            if (string.IsNullOrWhiteSpace(spec) || state == null)
+                return;
+
+            var raw = spec.Trim();
+            int plus = raw.LastIndexOf('+');
+            int minus = raw.LastIndexOf('-');
+            int idx;
+            int sign;
+            if (plus > 0 && (minus < 0 || plus < minus))
+            {
+                idx = plus;
+                sign = 1;
+            }
+            else if (minus > 0)
+            {
+                idx = minus;
+                sign = -1;
+            }
+            else
+            {
+                return;
+            }
+
+            string id = raw.Substring(0, idx).Trim();
+            if (!int.TryParse(raw.Substring(idx + 1).Trim(), out int amount) || string.IsNullOrEmpty(id))
+                return;
+
+            string name = null;
+            if (db != null && db.TryGetCharacter(id, out var ch) && ch != null)
+                name = ch.Name;
+            state.AddFavor(id, sign * amount, name);
+        }
+
+        static void NoteCharacterMeet(string tag, PlayerState state, EventDatabase db)
+        {
+            if (db == null || state == null || string.IsNullOrWhiteSpace(tag))
+                return;
+
+            if (db.TryGetCharacterByMeetTag(tag.Trim(), out var ch) && ch != null)
+                state.EnsureFavor(ch.Id, ch.Name, 20);
+        }
+
+        static void ApplyBuff(string rawId, PlayerState state, EventDatabase db)
+        {
+            if (db == null || string.IsNullOrWhiteSpace(rawId))
+                return;
+
+            var id = rawId.Trim();
+            int colon = id.IndexOf(':');
+            if (colon > 0)
+                id = id.Substring(0, colon).Trim();
+
+            if (db.TryGetBuff(id, out var def))
+                state.AddOrRefreshBuff(def);
         }
 
         static void ApplyAttrDelta(string part, PlayerState state)
@@ -90,14 +171,17 @@ namespace LifeSim.Data
             state.AddAttr(attr, sign * amount);
         }
 
-        public static void ApplyTags(string tags, PlayerState state)
+        public static void ApplyTags(string tags, PlayerState state, EventDatabase db = null)
         {
             if (string.IsNullOrWhiteSpace(tags) || state == null)
                 return;
 
             var parts = tags.Split(new[] { ';', '|' }, StringSplitOptions.RemoveEmptyEntries);
             foreach (var tag in parts)
+            {
                 state.AddTag(tag);
+                NoteCharacterMeet(tag, state, db);
+            }
         }
 
         public static bool RollKill(float killChance, PlayerState state, System.Random rng)
@@ -105,7 +189,7 @@ namespace LifeSim.Data
             if (killChance <= 0f || state == null || !state.Alive)
                 return false;
 
-            float chance = Mathf.Clamp01(killChance - state.Luck * 0.01f);
+            float chance = Mathf.Clamp01(killChance - state.GetAttr("luck") * 0.01f + state.GetKillChanceMod());
             if (rng.NextDouble() < chance)
             {
                 state.Alive = false;

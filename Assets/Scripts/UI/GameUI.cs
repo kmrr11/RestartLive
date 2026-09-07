@@ -11,6 +11,10 @@ namespace LifeSim.UI
     {
         [SerializeField] TextAsset eventsCsv;
         [SerializeField] TextAsset branchesCsv;
+        [SerializeField] TextAsset storiesCsv;
+        [SerializeField] TextAsset storyStepsCsv;
+        [SerializeField] TextAsset buffsCsv;
+        [SerializeField] TextAsset charactersCsv;
 
         GameSession _session;
         readonly StringBuilder _logBuilder = new StringBuilder();
@@ -30,6 +34,8 @@ namespace LifeSim.UI
         Text _logText;
         ScrollRect _logScroll;
         Button _nextYearButton;
+        Text _nextYearButtonLabel;
+        Button _confessButton;
 
         // Choice
         Text _choicePrompt;
@@ -38,6 +44,7 @@ namespace LifeSim.UI
 
         // End
         Text _summaryText;
+        bool _reviewingLife;
 
         void Awake()
         {
@@ -45,6 +52,14 @@ namespace LifeSim.UI
                 eventsCsv = Resources.Load<TextAsset>("Data/Events");
             if (branchesCsv == null)
                 branchesCsv = Resources.Load<TextAsset>("Data/Branches");
+            if (storiesCsv == null)
+                storiesCsv = Resources.Load<TextAsset>("Data/Stories");
+            if (storyStepsCsv == null)
+                storyStepsCsv = Resources.Load<TextAsset>("Data/StorySteps");
+            if (buffsCsv == null)
+                buffsCsv = Resources.Load<TextAsset>("Data/Buffs");
+            if (charactersCsv == null)
+                charactersCsv = Resources.Load<TextAsset>("Data/Characters");
 
             BuildUi();
             _session = new GameSession();
@@ -62,7 +77,7 @@ namespace LifeSim.UI
                 return;
             }
 
-            _session.Initialize(eventsCsv, branchesCsv);
+            _session.Initialize(eventsCsv, branchesCsv, storiesCsv, storyStepsCsv, buffsCsv, charactersCsv);
             RefreshAll();
         }
 
@@ -97,14 +112,18 @@ namespace LifeSim.UI
                 return;
 
             bool allocate = _session.Phase == GamePhase.Allocate;
-            bool playing = _session.Phase == GamePhase.Playing || _session.Phase == GamePhase.AwaitingChoice;
+            bool playing = _session.Phase == GamePhase.Playing ||
+                           _session.Phase == GamePhase.AwaitingChoice ||
+                           _session.Phase == GamePhase.InStory ||
+                           _session.Phase == GamePhase.StoryAwaitingChoice;
             bool ended = _session.Phase == GamePhase.Ended;
-            bool choosing = _session.Phase == GamePhase.AwaitingChoice;
+            bool choosing = _session.Phase == GamePhase.AwaitingChoice ||
+                            _session.Phase == GamePhase.StoryAwaitingChoice;
 
             _allocatePanel.SetActive(allocate);
             _playPanel.SetActive(playing || ended);
             _choicePanel.SetActive(choosing);
-            _endPanel.SetActive(ended);
+            _endPanel.SetActive(ended && !_reviewingLife);
 
             if (allocate)
             {
@@ -118,11 +137,40 @@ namespace LifeSim.UI
             }
 
             var p = _session.Player;
+            string storyHint = _session.InStoryMode ? "  [剧情中]" : string.Empty;
+            string buffLine = p.FormatBuffs();
+            string favorLine = p.FormatFavors();
+            string confessHint = string.IsNullOrEmpty(p.PendingConfessId)
+                ? string.Empty
+                : (string.IsNullOrEmpty(p.PendingConfessName)
+                    ? "\n已决定下一季告白"
+                    : $"\n已决定下一季向{p.PendingConfessName}告白");
             _statsText.text =
-                $"年龄 {p.Age}    力量 {p.Strength}  智力 {p.Intelligence}  运气 {p.Luck}  家境 {p.Family}";
+                $"年龄 {p.Age} · {SeasonUtil.ToDisplay(p.Season)}{storyHint}\n" +
+                $"力量 {p.GetAttr("str")}  智力 {p.GetAttr("int")}  运气 {p.GetAttr("luck")}  家境 {p.GetAttr("family")}" +
+                (string.IsNullOrEmpty(favorLine) ? string.Empty : "\n" + favorLine) +
+                (string.IsNullOrEmpty(buffLine) ? string.Empty : "\n" + buffLine) +
+                confessHint;
 
+            bool canAdvance = (_session.Phase == GamePhase.Playing ||
+                               _session.Phase == GamePhase.InStory ||
+                               _session.AwaitingContinue) && p.Alive;
             if (_nextYearButton != null)
-                _nextYearButton.interactable = _session.Phase == GamePhase.Playing && p.Alive;
+                _nextYearButton.interactable = canAdvance || (ended && _reviewingLife);
+            if (_confessButton != null)
+            {
+                _confessButton.gameObject.SetActive(!ended);
+                _confessButton.interactable = _session.CanConfess;
+            }
+            if (_nextYearButtonLabel != null)
+            {
+                if (ended)
+                    _nextYearButtonLabel.text = "返回结算";
+                else if (_session.AwaitingContinue || _session.InStoryMode)
+                    _nextYearButtonLabel.text = "继续";
+                else
+                    _nextYearButtonLabel.text = "下一季";
+            }
 
             if (ended)
                 _summaryText.text = _session.BuildSummary();
@@ -143,9 +191,11 @@ namespace LifeSim.UI
             }
 
             _choiceButtons.Clear();
-            _choicePrompt.text = _session.PendingEvent != null
-                ? _session.PendingEvent.Text
-                : "做出你的选择";
+            _choicePrompt.text = !string.IsNullOrEmpty(_session.ConfessPrompt)
+                ? _session.ConfessPrompt
+                : (_session.PendingStoryStep != null
+                    ? _session.PendingStoryStep.Text
+                    : (_session.PendingEvent != null ? _session.PendingEvent.Text : "做出你的选择"));
 
             foreach (var branch in _session.PendingChoices)
             {
@@ -159,7 +209,46 @@ namespace LifeSim.UI
 
         void ShowEnding()
         {
+            _reviewingLife = false;
             RefreshAll();
+        }
+
+        void ReviewLife()
+        {
+            _reviewingLife = true;
+            RefreshAll();
+            ScrollLogToTop();
+        }
+
+        void ReturnToEnding()
+        {
+            _reviewingLife = false;
+            RefreshAll();
+        }
+
+        void ScrollLogToTop()
+        {
+            if (_logScroll == null)
+                return;
+
+            Canvas.ForceUpdateCanvases();
+            if (_logText != null)
+                LayoutRebuilder.ForceRebuildLayoutImmediate(_logText.rectTransform);
+            if (_logScroll.content != null)
+                LayoutRebuilder.ForceRebuildLayoutImmediate(_logScroll.content);
+            _logScroll.verticalNormalizedPosition = 1f;
+            Canvas.ForceUpdateCanvases();
+        }
+
+        void OnPlayPrimaryClicked()
+        {
+            if (_session != null && _session.Phase == GamePhase.Ended)
+            {
+                ReturnToEnding();
+                return;
+            }
+
+            _session.Advance();
         }
 
         void StartLife()
@@ -172,6 +261,7 @@ namespace LifeSim.UI
 
         void Restart()
         {
+            _reviewingLife = false;
             _logBuilder.Length = 0;
             if (_logText != null)
                 _logText.text = string.Empty;
@@ -220,13 +310,13 @@ namespace LifeSim.UI
 
         void BuildAllocatePanel(Transform parent)
         {
-            CreateText(parent, "Title", "人生模拟器", 48, TextAnchor.UpperCenter,
+            CreateText(parent, "Title", "人生模拟器", 56, TextAnchor.UpperCenter,
                 new Vector2(0.1f, 0.82f), new Vector2(0.9f, 0.95f));
 
-            CreateText(parent, "Hint", "天赋已按总和随机生成（每项 1~10）", 28, TextAnchor.UpperCenter,
+            CreateText(parent, "Hint", "天赋已按总和随机生成（每项 1~10）", 34, TextAnchor.UpperCenter,
                 new Vector2(0.1f, 0.74f), new Vector2(0.9f, 0.82f));
 
-            _pointsText = CreateText(parent, "Points", "随机天赋", 30, TextAnchor.MiddleCenter,
+            _pointsText = CreateText(parent, "Points", "随机天赋", 36, TextAnchor.MiddleCenter,
                 new Vector2(0.1f, 0.58f), new Vector2(0.9f, 0.72f));
             _pointsText.horizontalOverflow = HorizontalWrapMode.Wrap;
 
@@ -246,10 +336,10 @@ namespace LifeSim.UI
         float AddAllocRow(Transform parent, string label, string key, float top)
         {
             float bottom = top - 0.08f;
-            CreateText(parent, label + "Label", label, 30, TextAnchor.MiddleLeft,
+            CreateText(parent, label + "Label", label, 36, TextAnchor.MiddleLeft,
                 new Vector2(0.2f, bottom), new Vector2(0.5f, top));
 
-            var value = CreateText(parent, label + "Value", "1", 30, TextAnchor.MiddleCenter,
+            var value = CreateText(parent, label + "Value", "1", 36, TextAnchor.MiddleCenter,
                 new Vector2(0.55f, bottom), new Vector2(0.8f, top));
             _allocValueTexts[key] = value;
             return bottom - 0.01f;
@@ -257,11 +347,12 @@ namespace LifeSim.UI
 
         void BuildPlayPanel(Transform parent)
         {
-            _statsText = CreateText(parent, "Stats", "年龄 0", 28, TextAnchor.UpperLeft,
-                new Vector2(0.05f, 0.9f), new Vector2(0.95f, 0.98f));
+            _statsText = CreateText(parent, "Stats", "年龄 0", 32, TextAnchor.UpperLeft,
+                new Vector2(0.05f, 0.80f), new Vector2(0.95f, 0.98f));
+            _statsText.verticalOverflow = VerticalWrapMode.Overflow;
 
             var logHost = CreatePanel(parent, "LogHost", new Color(0.16f, 0.17f, 0.2f, 1f));
-            SetRect(logHost.GetComponent<RectTransform>(), new Vector2(0.05f, 0.22f), new Vector2(0.95f, 0.88f));
+            SetRect(logHost.GetComponent<RectTransform>(), new Vector2(0.05f, 0.18f), new Vector2(0.95f, 0.79f));
 
             // Prefer editor-authored prefab; fall back to runtime build.
             var prefab = Resources.Load<GameObject>("UI/EventLogScroll");
@@ -283,13 +374,19 @@ namespace LifeSim.UI
 
             if (_logText != null)
             {
-                _logText.font = ResolveUiFont(_logText.fontSize > 0 ? _logText.fontSize : 26);
+                const int logSize = 32;
+                _logText.font = ResolveUiFont(logSize);
+                _logText.fontSize = logSize;
                 _logText.horizontalOverflow = HorizontalWrapMode.Wrap;
                 _logText.verticalOverflow = VerticalWrapMode.Overflow;
             }
 
-            _nextYearButton = CreateButton(parent, "下一年", () => _session.AdvanceYear());
-            SetRect(_nextYearButton.GetComponent<RectTransform>(), new Vector2(0.25f, 0.08f), new Vector2(0.75f, 0.16f));
+            _nextYearButton = CreateButton(parent, "下一季", OnPlayPrimaryClicked);
+            SetRect(_nextYearButton.GetComponent<RectTransform>(), new Vector2(0.52f, 0.08f), new Vector2(0.95f, 0.16f));
+            _nextYearButtonLabel = _nextYearButton.GetComponentInChildren<Text>();
+
+            _confessButton = CreateButton(parent, "告白", () => _session.BeginConfessSelect());
+            SetRect(_confessButton.GetComponent<RectTransform>(), new Vector2(0.05f, 0.08f), new Vector2(0.48f, 0.16f));
         }
 
         GameObject BuildEventLogScroll(Transform parent)
@@ -343,7 +440,7 @@ namespace LifeSim.UI
             vlg.childForceExpandWidth = true;
             vlg.childForceExpandHeight = false;
 
-            _logText = CreateText(content.transform, "LogText", string.Empty, 26, TextAnchor.UpperLeft,
+            _logText = CreateText(content.transform, "LogText", string.Empty, 32, TextAnchor.UpperLeft,
                 Vector2.zero, Vector2.one);
             var logRt = _logText.rectTransform;
             logRt.anchorMin = new Vector2(0f, 1f);
@@ -369,31 +466,62 @@ namespace LifeSim.UI
             var box = CreatePanel(parent, "ChoiceBox", new Color(0.18f, 0.19f, 0.23f, 1f));
             SetRect(box.GetComponent<RectTransform>(), new Vector2(0.1f, 0.25f), new Vector2(0.9f, 0.75f));
 
-            _choicePrompt = CreateText(box.transform, "Prompt", "选择", 28, TextAnchor.UpperCenter,
+            _choicePrompt = CreateText(box.transform, "Prompt", "选择", 34, TextAnchor.UpperCenter,
                 new Vector2(0.08f, 0.7f), new Vector2(0.92f, 0.95f));
             _choicePrompt.horizontalOverflow = HorizontalWrapMode.Wrap;
 
-            var rootGo = new GameObject("Buttons", typeof(RectTransform), typeof(VerticalLayoutGroup));
-            rootGo.transform.SetParent(box.transform, false);
-            SetRect(rootGo.GetComponent<RectTransform>(), new Vector2(0.1f, 0.08f), new Vector2(0.9f, 0.65f));
+            var scrollGo = new GameObject("ChoiceScroll", typeof(RectTransform), typeof(ScrollRect), typeof(Image));
+            scrollGo.transform.SetParent(box.transform, false);
+            SetRect(scrollGo.GetComponent<RectTransform>(), new Vector2(0.1f, 0.08f), new Vector2(0.9f, 0.65f));
+            scrollGo.GetComponent<Image>().color = new Color(0.16f, 0.17f, 0.2f, 1f);
+            var scroll = scrollGo.GetComponent<ScrollRect>();
+            scroll.horizontal = false;
+            scroll.movementType = ScrollRect.MovementType.Clamped;
+            scroll.scrollSensitivity = 24f;
+
+            var viewportGo = new GameObject("Viewport", typeof(RectTransform), typeof(Image), typeof(Mask));
+            viewportGo.transform.SetParent(scrollGo.transform, false);
+            Stretch(viewportGo);
+            viewportGo.GetComponent<Image>().color = new Color(1f, 1f, 1f, 0.01f);
+            viewportGo.GetComponent<Mask>().showMaskGraphic = false;
+
+            var rootGo = new GameObject("Buttons", typeof(RectTransform), typeof(VerticalLayoutGroup), typeof(ContentSizeFitter));
+            rootGo.transform.SetParent(viewportGo.transform, false);
+            var rootRt = rootGo.GetComponent<RectTransform>();
+            rootRt.anchorMin = new Vector2(0f, 1f);
+            rootRt.anchorMax = new Vector2(1f, 1f);
+            rootRt.pivot = new Vector2(0.5f, 1f);
+            rootRt.offsetMin = Vector2.zero;
+            rootRt.offsetMax = Vector2.zero;
             var layout = rootGo.GetComponent<VerticalLayoutGroup>();
-            layout.spacing = 12;
-            layout.childForceExpandHeight = true;
+            layout.spacing = 10;
+            layout.childForceExpandHeight = false;
             layout.childForceExpandWidth = true;
+            layout.childControlHeight = true;
+            layout.childControlWidth = true;
+            var fitter = rootGo.GetComponent<ContentSizeFitter>();
+            fitter.horizontalFit = ContentSizeFitter.FitMode.Unconstrained;
+            fitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+            scroll.viewport = viewportGo.GetComponent<RectTransform>();
+            scroll.content = rootRt;
             _choiceButtonRoot = rootGo.transform;
         }
 
         void BuildEndPanel(Transform parent)
         {
-            CreateText(parent, "EndTitle", "人生结算", 44, TextAnchor.UpperCenter,
+            CreateText(parent, "EndTitle", "人生结算", 52, TextAnchor.UpperCenter,
                 new Vector2(0.15f, 0.7f), new Vector2(0.85f, 0.85f));
 
-            _summaryText = CreateText(parent, "Summary", string.Empty, 30, TextAnchor.MiddleCenter,
-                new Vector2(0.15f, 0.4f), new Vector2(0.85f, 0.68f));
+            _summaryText = CreateText(parent, "Summary", string.Empty, 32, TextAnchor.UpperCenter,
+                new Vector2(0.1f, 0.34f), new Vector2(0.9f, 0.7f));
             _summaryText.horizontalOverflow = HorizontalWrapMode.Wrap;
+            _summaryText.verticalOverflow = VerticalWrapMode.Overflow;
+
+            var review = CreateButton(parent, "回顾一生", ReviewLife);
+            SetRect(review.GetComponent<RectTransform>(), new Vector2(0.12f, 0.2f), new Vector2(0.48f, 0.3f));
 
             var restart = CreateButton(parent, "再来一世", Restart);
-            SetRect(restart.GetComponent<RectTransform>(), new Vector2(0.25f, 0.2f), new Vector2(0.75f, 0.3f));
+            SetRect(restart.GetComponent<RectTransform>(), new Vector2(0.52f, 0.2f), new Vector2(0.88f, 0.3f));
         }
 
         static void EnsureEventSystem()
@@ -472,8 +600,12 @@ namespace LifeSim.UI
             button.targetGraphic = image;
             button.onClick.AddListener(onClick);
 
-            var text = CreateText(go.transform, "Label", label, 28, TextAnchor.MiddleCenter, Vector2.zero, Vector2.one);
+            var text = CreateText(go.transform, "Label", label, 34, TextAnchor.MiddleCenter, Vector2.zero, Vector2.one);
             Stretch(text.rectTransform);
+            var le = go.AddComponent<LayoutElement>();
+            le.minHeight = 56f;
+            le.preferredHeight = 56f;
+            le.flexibleWidth = 1f;
             return button;
         }
 
