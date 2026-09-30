@@ -45,6 +45,75 @@ namespace LifeSim.UI
         // End
         Text _summaryText;
         bool _reviewingLife;
+        Button _continueButton;
+        Text _saveStatus;
+        string SavePath => System.IO.Path.Combine(Application.persistentDataPath, "life-v1.json");
+
+        GameSession CreateSession(int? seed = null)
+        {
+            var session = new GameSession(seed);
+            session.Initialize(eventsCsv, branchesCsv, storiesCsv, storyStepsCsv, buffsCsv, charactersCsv);
+            return session;
+        }
+
+        void BindSession(GameSession session)
+        {
+            if (_session != null)
+            {
+                _session.OnLog -= AppendLog;
+                _session.OnStateChanged -= RefreshAll;
+                _session.OnAwaitingChoice -= ShowChoices;
+                _session.OnEnded -= ShowEnding;
+            }
+            _session = session;
+            _session.OnLog += AppendLog;
+            _session.OnStateChanged += RefreshAll;
+            _session.OnAwaitingChoice += ShowChoices;
+            _session.OnEnded += ShowEnding;
+        }
+
+        void Perform(string action, string value = null)
+        {
+            _session.Perform(action, value);
+            if (_session.Phase != GamePhase.Allocate)
+            {
+                try
+                {
+                    _session.ExportJournal().Write(SavePath);
+                    _saveStatus.text = "已保存";
+                }
+                catch (System.Exception ex)
+                {
+                    _saveStatus.text = "保存失败";
+                    Debug.LogError("[LifeSim] Save failed: " + ex.Message);
+                }
+            }
+            RefreshAll();
+        }
+
+        void ContinueSavedLife()
+        {
+            try
+            {
+                var journal = LifeJournal.Read(SavePath);
+                var restored = CreateSession(journal.Seed);
+                restored.Replay(journal);
+                BindSession(restored);
+                _reviewingLife = false;
+                _logBuilder.Clear();
+                foreach (var line in restored.Transcript)
+                    _logBuilder.AppendLine(line);
+                _logText.text = _logBuilder.ToString();
+                RefreshAll();
+                if (restored.PendingChoices.Count > 0) ShowChoices();
+                ScrollLogToBottom();
+            }
+            catch (System.Exception ex)
+            {
+                _pointsText.text = "无法继续：存档损坏或剧情版本已变更。";
+                Debug.LogError("[LifeSim] Load failed: " + ex.Message);
+            }
+        }
 
         void Awake()
         {
@@ -62,15 +131,12 @@ namespace LifeSim.UI
                 charactersCsv = Resources.Load<TextAsset>("Data/Characters");
 
             BuildUi();
-            _session = new GameSession();
-            _session.OnLog += AppendLog;
-            _session.OnStateChanged += RefreshAll;
-            _session.OnAwaitingChoice += ShowChoices;
-            _session.OnEnded += ShowEnding;
+            BindSession(new GameSession());
 
             if (eventsCsv == null || branchesCsv == null)
             {
                 Debug.LogError("[LifeSim] Missing Resources/Data/Events.txt or Branches.txt. Menu: LifeSim/Sync CSV To Resources");
+                BindSession(new GameSession());
                 _session.ResetToAllocate();
                 AppendLog("数据表缺失：请先执行菜单 LifeSim/Sync CSV To Resources");
                 RefreshAll();
@@ -127,6 +193,7 @@ namespace LifeSim.UI
 
             if (allocate)
             {
+                _continueButton.interactable = System.IO.File.Exists(SavePath);
                 var ap = _session.Player;
                 _pointsText.text =
                     $"随机天赋（总和 {GameSession.PointPool}）\n力量 {ap.Strength}  智力 {ap.Intelligence}  运气 {ap.Luck}  家境 {ap.Family}";
@@ -146,7 +213,7 @@ namespace LifeSim.UI
                     ? "\n已决定下一季告白"
                     : $"\n已决定下一季向{p.PendingConfessName}告白");
             _statsText.text =
-                $"年龄 {p.Age} · {SeasonUtil.ToDisplay(p.Season)}{storyHint}\n" +
+                $"年龄 {p.Age} · {(p.InStory ? SeasonUtil.ToDisplay(p.Season) : SeasonUtil.ToHalfYearDisplay(p.Season))}{storyHint}\n" +
                 $"力量 {p.GetAttr("str")}  智力 {p.GetAttr("int")}  运气 {p.GetAttr("luck")}  家境 {p.GetAttr("family")}" +
                 (string.IsNullOrEmpty(favorLine) ? string.Empty : "\n" + favorLine) +
                 (string.IsNullOrEmpty(buffLine) ? string.Empty : "\n" + buffLine) +
@@ -169,7 +236,7 @@ namespace LifeSim.UI
                 else if (_session.AwaitingContinue || _session.InStoryMode)
                     _nextYearButtonLabel.text = "继续";
                 else
-                    _nextYearButtonLabel.text = "下一季";
+                    _nextYearButtonLabel.text = (int)p.Season < 2 ? "下半年" : "下一年";
             }
 
             if (ended)
@@ -200,7 +267,7 @@ namespace LifeSim.UI
             foreach (var branch in _session.PendingChoices)
             {
                 var captured = branch.ChoiceId;
-                var btn = CreateButton(_choiceButtonRoot, branch.Label, () => _session.Choose(captured));
+                var btn = CreateButton(_choiceButtonRoot, branch.Label, () => Perform("choose", captured));
                 _choiceButtons.Add(btn);
             }
 
@@ -248,7 +315,7 @@ namespace LifeSim.UI
                 return;
             }
 
-            _session.Advance();
+            Perform("advance");
         }
 
         void StartLife()
@@ -256,7 +323,7 @@ namespace LifeSim.UI
             _logBuilder.Length = 0;
             if (_logText != null)
                 _logText.text = string.Empty;
-            _session.StartLife();
+            Perform("start");
         }
 
         void Restart()
@@ -265,7 +332,7 @@ namespace LifeSim.UI
             _logBuilder.Length = 0;
             if (_logText != null)
                 _logText.text = string.Empty;
-            _session.ResetToAllocate();
+            BindSession(CreateSession());
             RefreshAll();
         }
 
@@ -326,11 +393,13 @@ namespace LifeSim.UI
             y = AddAllocRow(parent, "运气", "luck", y);
             AddAllocRow(parent, "家境", "family", y);
 
-            var rerollBtn = CreateButton(parent, "重新随机", () => _session.RollAttributes());
+            var rerollBtn = CreateButton(parent, "重新随机", () => Perform("roll"));
             SetRect(rerollBtn.GetComponent<RectTransform>(), new Vector2(0.12f, 0.14f), new Vector2(0.48f, 0.22f));
 
             var startBtn = CreateButton(parent, "开始人生", StartLife);
             SetRect(startBtn.GetComponent<RectTransform>(), new Vector2(0.52f, 0.14f), new Vector2(0.88f, 0.22f));
+            _continueButton = CreateButton(parent, "继续人生", ContinueSavedLife);
+            SetRect(_continueButton.GetComponent<RectTransform>(), new Vector2(0.12f, 0.04f), new Vector2(0.88f, 0.12f));
         }
 
         float AddAllocRow(Transform parent, string label, string key, float top)
@@ -349,7 +418,12 @@ namespace LifeSim.UI
         {
             _statsText = CreateText(parent, "Stats", "年龄 0", 32, TextAnchor.UpperLeft,
                 new Vector2(0.05f, 0.80f), new Vector2(0.95f, 0.98f));
-            _statsText.verticalOverflow = VerticalWrapMode.Overflow;
+            _statsText.verticalOverflow = VerticalWrapMode.Truncate;
+            _statsText.resizeTextForBestFit = true;
+            _statsText.resizeTextMinSize = 18;
+            _statsText.resizeTextMaxSize = 32;
+            _saveStatus = CreateText(parent, "SaveStatus", "", 22, TextAnchor.MiddleRight,
+                new Vector2(0.05f, 0.02f), new Vector2(0.95f, 0.06f));
 
             var logHost = CreatePanel(parent, "LogHost", new Color(0.16f, 0.17f, 0.2f, 1f));
             SetRect(logHost.GetComponent<RectTransform>(), new Vector2(0.05f, 0.18f), new Vector2(0.95f, 0.79f));
@@ -381,11 +455,11 @@ namespace LifeSim.UI
                 _logText.verticalOverflow = VerticalWrapMode.Overflow;
             }
 
-            _nextYearButton = CreateButton(parent, "下一季", OnPlayPrimaryClicked);
+            _nextYearButton = CreateButton(parent, "继续人生", OnPlayPrimaryClicked);
             SetRect(_nextYearButton.GetComponent<RectTransform>(), new Vector2(0.52f, 0.08f), new Vector2(0.95f, 0.16f));
             _nextYearButtonLabel = _nextYearButton.GetComponentInChildren<Text>();
 
-            _confessButton = CreateButton(parent, "告白", () => _session.BeginConfessSelect());
+            _confessButton = CreateButton(parent, "告白", () => Perform("confess"));
             SetRect(_confessButton.GetComponent<RectTransform>(), new Vector2(0.05f, 0.08f), new Vector2(0.48f, 0.16f));
         }
 
@@ -512,8 +586,14 @@ namespace LifeSim.UI
             CreateText(parent, "EndTitle", "人生结算", 52, TextAnchor.UpperCenter,
                 new Vector2(0.15f, 0.7f), new Vector2(0.85f, 0.85f));
 
-            _summaryText = CreateText(parent, "Summary", string.Empty, 32, TextAnchor.UpperCenter,
-                new Vector2(0.1f, 0.34f), new Vector2(0.9f, 0.7f));
+            var summaryHost = CreatePanel(parent, "Biography", new Color(0.1f, 0.11f, 0.13f, 1f));
+            SetRect(summaryHost.GetComponent<RectTransform>(), new Vector2(0.08f, 0.33f), new Vector2(0.92f, 0.7f));
+            var previousScroll = _logScroll;
+            var previousText = _logText;
+            BuildEventLogScroll(summaryHost.transform);
+            _summaryText = _logText;
+            _logScroll = previousScroll;
+            _logText = previousText;
             _summaryText.horizontalOverflow = HorizontalWrapMode.Wrap;
             _summaryText.verticalOverflow = VerticalWrapMode.Overflow;
 

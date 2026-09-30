@@ -33,6 +33,9 @@
 ExportedObj/
 .consulo/
 *.csproj
+!tools/LifeSim.Checks/*.csproj
+/tools/LifeSim.Checks/bin/
+/tools/LifeSim.Checks/obj/
 *.unityproj
 *.sln
 *.suo

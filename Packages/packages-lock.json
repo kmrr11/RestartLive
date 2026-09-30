@@ -1,4 +1,4 @@
-﻿{
+{
   "dependencies": {
     "com.unity.2d.sprite": {
       "version": "1.0.0",
@@ -121,6 +121,20 @@
         "com.unity.modules.ui": "1.0.0",
         "com.unity.modules.imgui": "1.0.0"
       }
+    },
+    "com.unitycowork.locus": {
+      "version": "file:com.unitycowork.locus",
+      "depth": 0,
+      "source": "embedded",
+      "dependencies": {
+        "com.unitycowork.puerts-runtime": "0.1.0"
+      }
+    },
+    "com.unitycowork.puerts-runtime": {
+      "version": "file:PureTSMcp",
+      "depth": 0,
+      "source": "embedded",
+      "dependencies": {}
     },
     "com.unity.modules.ai": {
       "version": "1.0.0",
@@ -358,4 +372,3 @@
     }
   }
 }
-

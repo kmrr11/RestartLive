@@ -24,7 +24,9 @@ namespace LifeSim.Event
             var pool = BuildPool(state);
             for (int i = 0; i < count && pool.Count > 0; i++)
             {
-                var picked = WeightedPick(pool);
+                // A milestone keeps ordinary weighting until its final eligible season.
+                var urgent = pool.FindAll(e => NarrativeRules.IsMilestoneDue(e, state));
+                var picked = WeightedPick(urgent.Count > 0 ? urgent : pool);
                 if (picked == null)
                     break;
 
@@ -49,10 +51,13 @@ namespace LifeSim.Event
                 if (evt.IsForced)
                     continue;
 
+                if (evt.Id == "marriage" && !NarrativeRules.HasConfirmedPartner(state))
+                    continue;
+
                 if (state.Age < evt.AgeMin || state.Age > evt.AgeMax)
                     continue;
 
-                if (!SeasonUtil.Allows(evt.SeasonMask, state.Season))
+                if (!SeasonUtil.AllowsHalfYear(evt.SeasonMask, state.Season))
                     continue;
 
                 if (evt.TriggersOnce && state.TriggeredOnceEvents.Contains(evt.Id))

@@ -16,7 +16,7 @@ namespace LifeSim.Core
         Ended
     }
 
-    public sealed class GameSession
+    public sealed partial class GameSession
     {
         public const int PointPool = 20;
         public const int MaxAge = 80;
@@ -47,7 +47,7 @@ namespace LifeSim.Core
         public event Action OnEnded;
 
         readonly EventDatabase _db = new EventDatabase();
-        readonly System.Random _rng = new System.Random();
+        readonly System.Random _rng;
         EventSelector _selector;
         readonly List<BranchDefinition> _pendingChoices = new List<BranchDefinition>();
         readonly Queue<EventDefinition> _yearQueue = new Queue<EventDefinition>();
@@ -59,6 +59,8 @@ namespace LifeSim.Core
             TextAsset storiesCsv = null, TextAsset storyStepsCsv = null, TextAsset buffsCsv = null,
             TextAsset charactersCsv = null)
         {
+            _contentHash = LifeJournal.Hash(string.Join("\n---\n", eventsCsv?.text, branchesCsv?.text,
+                storiesCsv?.text, storyStepsCsv?.text, buffsCsv?.text, charactersCsv?.text));
             _db.Load(eventsCsv, branchesCsv, storiesCsv, storyStepsCsv, buffsCsv, charactersCsv);
             _selector = new EventSelector(_db, _rng);
             ResetToAllocate();
@@ -186,13 +188,13 @@ namespace LifeSim.Core
             if (Phase != GamePhase.Playing || Player == null || !Player.Alive || Player.InStory)
                 return;
 
-            if (Player.Age > MaxAge || (Player.Age == MaxAge && Player.Season == Season.Winter))
+            if (Player.Age > MaxAge || (Player.Age == MaxAge && (int)Player.Season >= 2))
             {
                 EndLife(FormatOldAgeDeath());
                 return;
             }
 
-            AdvanceSeasonInternal(1);
+            AdvanceSeasonInternal((int)Player.Season % 2 == 0 ? 2 : 1);
             ResolveSeasonEvents();
         }
 
@@ -253,6 +255,8 @@ namespace LifeSim.Core
                 if (!string.IsNullOrEmpty(ch.MeetTag) && !Player.HasTag(ch.MeetTag))
                     continue;
                 if (!string.IsNullOrEmpty(ch.ExcludeTag) && Player.HasTag(ch.ExcludeTag))
+                    continue;
+                if (Player.HasTag("apart_" + ch.Id))
                     continue;
                 list.Add(ch);
             }
@@ -315,6 +319,8 @@ namespace LifeSim.Core
                 return false;
             }
 
+            if (success)
+                Player.AddTag("confessed_" + ch.Id);
             _yearQueue.Enqueue(evt);
             return true;
         }
@@ -381,7 +387,7 @@ namespace LifeSim.Core
 
         string FormatMoment()
         {
-            return $"{Player.Age}岁·{SeasonUtil.ToDisplay(Player.Season)}";
+            return $"{Player.Age}岁·{(Player.InStory ? SeasonUtil.ToDisplay(Player.Season) : SeasonUtil.ToHalfYearDisplay(Player.Season))}";
         }
 
         public void Choose(string choiceId)
@@ -633,10 +639,40 @@ namespace LifeSim.Core
             PendingEvent = null;
             _resumeAfterRandom = null;
             Player.ActiveStoryId = storyId;
+            // The superpower arc chooses exactly one ability at entry.  Use the
+            // session RNG so the choice is deterministic and replayable.
+            if (storyId == "superpower_arc" && GetSuperpowerAbility() == null)
+            {
+                string[] abilities = { "telekinesis", "time", "mindread", "heal", "luck", "echo" };
+                string[] names = { "念动", "停时", "读心", "愈合", "偏运", "回声" };
+                int pick = _rng.Next(abilities.Length);
+                Player.AddTag("superpower_" + abilities[pick]);
+                Player.AppendHistory("超能力觉醒 · " + names[pick]);
+                Log("觉醒能力：" + names[pick]);
+            }
             Log($"—— 进入剧情线：{story.Title} ——");
             Player.AppendHistory($"剧情开始 · {story.Title}");
             ShowStoryStep(first);
             return true;
+        }
+
+        static readonly string[] SuperpowerAbilities =
+        {
+            "telekinesis", "time", "mindread", "heal", "luck", "echo"
+        };
+
+        // Only the six ability ids count. superpower_touch / superpower_done must not
+        // skip the awakening roll, or every unique beat gets filtered out.
+        string GetSuperpowerAbility()
+        {
+            if (Player == null || Player.Tags == null) return null;
+            for (int i = 0; i < SuperpowerAbilities.Length; i++)
+            {
+                if (Player.HasTag("superpower_" + SuperpowerAbilities[i]))
+                    return SuperpowerAbilities[i];
+            }
+
+            return null;
         }
 
         void ContinueStory()
@@ -819,6 +855,16 @@ namespace LifeSim.Core
             }
 
             ClearStory();
+            if (storyId == "isekai_arc" && Player.HasTag("lise_hidden_life"))
+            {
+                // This epilogue covers the rest of a life in the other world.
+                // Do not resume the modern-world seasonal event pool afterwards.
+                Player.Age = Math.Max(Player.Age, MaxAge);
+                Player.Season = Season.Winter;
+                Player.AppendHistory("与莉瑟留在异世界边境，度过余生");
+                EndLife("你与莉瑟在异世界边境相伴至老，最终在她身旁安然走完一生。");
+                return;
+            }
             Phase = GamePhase.Playing;
             RaiseState();
             CheckEndAfterResolve();
@@ -842,7 +888,7 @@ namespace LifeSim.Core
                 return;
             }
 
-            if (Player.Age >= MaxAge && Player.Season == Season.Winter)
+            if (Player.Age >= MaxAge && (int)Player.Season >= 2)
                 EndLife(FormatOldAgeDeath());
         }
 
@@ -948,6 +994,7 @@ namespace LifeSim.Core
 
         void Log(string line)
         {
+            _transcript.Add(line);
             OnLog?.Invoke(line);
         }
 

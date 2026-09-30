@@ -27,13 +27,13 @@ namespace LifeSim.Data
         static bool EvaluateSingle(string expr, PlayerState state, bool luckSoftensThreshold)
         {
             if (string.IsNullOrEmpty(expr))
-                return true;
+                return false;
 
             if (expr.StartsWith("!tag:", StringComparison.OrdinalIgnoreCase))
                 return !state.HasTag(expr.Substring(5));
 
             if (expr.StartsWith("tag:", StringComparison.OrdinalIgnoreCase))
-                return state.HasTag(expr.Substring(4));
+                return state != null && !string.IsNullOrWhiteSpace(expr.Substring(4)) && state.HasTag(expr.Substring(4));
 
             if (expr.StartsWith("!buff:", StringComparison.OrdinalIgnoreCase))
                 return !state.HasBuff(expr.Substring(6));
@@ -59,12 +59,15 @@ namespace LifeSim.Data
             }
 
             if (op == null)
-                return true;
+                return false;
 
             string left = expr.Substring(0, opIndex).Trim();
             string rightRaw = expr.Substring(opIndex + op.Length).Trim();
             if (!int.TryParse(rightRaw, out int right))
                 return false;
+
+            if (string.Equals(left, "age", StringComparison.OrdinalIgnoreCase) || left == "年龄")
+                return state != null && Compare(state.Age, op, right);
 
             if (luckSoftensThreshold && (op == ">=" || op == ">"))
             {
@@ -73,14 +76,14 @@ namespace LifeSim.Data
                 right = Math.Max(0, right - soften);
             }
 
+            if (state == null || !IsKnownAttribute(left)) return false;
             int leftValue = state.GetAttr(left);
             return Compare(leftValue, op, right);
         }
 
         static bool EvaluateFavor(string spec, PlayerState state, bool luckSoftensThreshold)
         {
-            if (string.IsNullOrWhiteSpace(spec) || state == null)
-                return true;
+            if (string.IsNullOrWhiteSpace(spec) || state == null) return false;
 
             string op = null;
             int opIndex = -1;
@@ -97,7 +100,7 @@ namespace LifeSim.Data
             }
 
             if (op == null)
-                return state.GetFavor(spec.Trim()) > 0;
+                return !string.IsNullOrWhiteSpace(spec) && state.GetFavor(spec.Trim()) > 0;
 
             string id = spec.Substring(0, opIndex).Trim();
             if (!int.TryParse(spec.Substring(opIndex + op.Length).Trim(), out int right))
@@ -107,6 +110,16 @@ namespace LifeSim.Data
                 right = Math.Max(0, right - state.GetAttr("luck") / 5);
 
             return Compare(state.GetFavor(id), op, right);
+        }
+
+        static bool IsKnownAttribute(string key)
+        {
+            switch ((key ?? string.Empty).Trim().ToLowerInvariant())
+            {
+                case "str": case "strength": case "力量": case "int": case "intelligence": case "智力":
+                case "luck": case "运气": case "family": case "家境": case "age": case "年龄": return true;
+                default: return false;
+            }
         }
 
         static bool Compare(int leftValue, string op, int right)

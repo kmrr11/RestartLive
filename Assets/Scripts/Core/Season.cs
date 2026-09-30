@@ -10,6 +10,11 @@ namespace LifeSim.Core
 
     public static class SeasonUtil
     {
+        public static string ToHalfYearDisplay(Season season) => (int)season < 2 ? "上半年" : "下半年";
+
+        public static bool AllowsHalfYear(int mask, Season season) =>
+            (mask & ((int)season < 2 ? 0b0011 : 0b1100)) != 0;
+
         public static string ToDisplay(Season season)
         {
             switch (season)
